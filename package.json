@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "clubhouse-lib": "^0.10.0",
+    "make-runnable": "^1.3.6"
+  },
+  "name": "clubhouse-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT"
+}
