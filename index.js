@@ -1,11 +1,9 @@
+dotenv = require('dotenv').config()
 const ch = require('clubhouse-lib')
 
-const CLUBHOUSE_API_TOKEN_SOURCE = "5f1114da-18d3-48d8-8e57-89178d776661"
-const CLUBHOUSE_API_TOKEN_TARGET = "5f112e94-3504-4c09-84b4-88aba7b309c8"
-
 // API Clients per workspace
-const source = ch.create(CLUBHOUSE_API_TOKEN_SOURCE); 
-const target = ch.create(CLUBHOUSE_API_TOKEN_TARGET); 
+const source = ch.create(process.env.CLUBHOUSE_API_TOKEN_SOURCE); 
+const target = ch.create(process.env.CLUBHOUSE_API_TOKEN_TARGET); 
 
 // TODO: move to args
 const targetEpic = 422
