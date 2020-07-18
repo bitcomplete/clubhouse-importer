@@ -109,7 +109,7 @@ const importAll = async () => {
 
 
 const updateStory = async (newStory) => {
-    console.log(newStory)
+//    console.log(newStory)
     if (!newStory.create.name.startsWith(migratedPrefix)) {
         await target.createStory(newStory.create).then(async res => {
             console.log(`Created new story #${res.id}: ${res.name}`)
@@ -188,34 +188,6 @@ const getStoryForImport = async (sid, resourceMaps) => {
 }
 
 
-const _getMapObj = async (apiCall, keyField, innerArrayField) => {
-    const sourceMapNameToId = {}
-    await source[apiCall]().then(list => {
-        list.forEach(i => {
-            if (innerArrayField) {
-
-            } else {               
-                sourceMapNameToId[_resolve(keyField, i)] = i.id
-            }
-            
-        })        
-    })
-    console.log(`...Temp map for ${apiCall}`)
-    console.log(sourceMapNameToId)
-
-    const mapSourceToTargetIds = {}
-    await target[apiCall]().then(list => {
-        list.forEach(i => {
-            const oldId = sourceMapNameToId[_resolve(keyField, i)]
-            mapSourceToTargetIds[oldId] = i.id
-        })
-    })
-    console.log(`...Map for ${apiCall}`)
-    console.log(mapSourceToTargetIds)
-    return mapSourceToTargetIds
-}
-
-
 const mapMembers = (oldMemberIds, membersMap) => {
     const memberIds =  []
     oldMemberIds.forEach(o_id => {
@@ -228,33 +200,53 @@ const mapMembers = (oldMemberIds, membersMap) => {
 }
 
 
-const getResourceMaps = async () => {
-    // Map Members
-    const membersMap = await _getMapObj('listMembers', 'profile.email_address')
+const _getMapObj = async (apiCall, keyField, innerArrayField) => {
+    const sourceMapNameToId = {}
+    await source[apiCall]().then(list => {
+        list.forEach(i => {
+            if (innerArrayField) {
+                i[innerArrayField].forEach(inner => {
+                    sourceMapNameToId[_resolve(keyField, inner)] = inner.id
+                })
+            } else {               
+                sourceMapNameToId[_resolve(keyField, i)] = i.id
+            }            
+        })        
+    })
+    console.log(`...Temp map by ${keyField} for ${apiCall}`)
+    console.log(sourceMapNameToId)
 
-    // Map Iterations
+    const mapSourceToTargetIds = {}
+    await target[apiCall]().then(list => {
+        list.forEach(i => {
+            if (innerArrayField) {
+                i[innerArrayField].forEach(inner => {
+                    const oldId = sourceMapNameToId[_resolve(keyField, inner)]
+                    if (oldId) {
+                        mapSourceToTargetIds[oldId] = inner.id
+                    }
+                })
+            } else {
+                const oldId = sourceMapNameToId[_resolve(keyField, i)]
+                if (oldId) {
+                    mapSourceToTargetIds[oldId] = i.id
+                }
+            }
+        })
+    })
+    console.log(`...ID map for ${apiCall}`)
+    console.log(mapSourceToTargetIds)
+    return mapSourceToTargetIds
+}
+
+
+/* Create objects mapping old workspace ids to new workspace ids for
+   member, iterataion, and workflow resources */
+const getResourceMaps = async () => {
+
+    const membersMap = await _getMapObj('listMembers', 'profile.email_address')
     const itersMap = await _getMapObj('listIterations', 'name')
-            
-    // Map Workflows
-    const sourceWfMap = {}
-    await source.listWorkflows().then(wf => {
-        wf.forEach(wfs => {
-            wfs.states.forEach(state => {
-                sourceWfMap[state.name] = state.id
-            })
-        })
-    })
-    console.log('...')
-    const wfMap = {}
-    await target.listWorkflows().then(wf => {
-        wf.forEach(wfs => {
-            wfs.states.forEach(state => {
-                const oldId = sourceWfMap[state.name]
-                wfMap[oldId] = state.id
-            })
-        })
-    })
-    console.log(wfMap)
+    const wfMap = await _getMapObj('listWorkflows', 'name', 'states')
 
     return {
         members: membersMap,
@@ -263,7 +255,7 @@ const getResourceMaps = async () => {
     }
 }
 
-
+/* Utility to remove null and undefined values from an object */
 const _cleanObj = (obj) => {
   var propNames = Object.getOwnPropertyNames(obj);
   for (var i = 0; i < propNames.length; i++) {
@@ -276,7 +268,7 @@ const _cleanObj = (obj) => {
 }
 
 
-
+/* Utility to do a deep resolution of a nested object key */
 const _resolve = (path, obj=self, separator='.') => {
     var properties = Array.isArray(path) ? path : path.split(separator)
     return properties.reduce((prev, curr) => prev && prev[curr], obj)
