@@ -2,14 +2,18 @@ dotenv = require('dotenv').config()
 const ch = require('clubhouse-lib')
 
 // API Clients per workspace
-const source = ch.create(process.env.CLUBHOUSE_API_TOKEN_SOURCE); 
-const target = ch.create(process.env.CLUBHOUSE_API_TOKEN_TARGET); 
+const sourceApi = ch.create(process.env.CLUBHOUSE_API_TOKEN_SOURCE); 
+const targetApi = ch.create(process.env.CLUBHOUSE_API_TOKEN_TARGET); 
 
-// TODO: move to args
-const targetEpic = 422
-const targetProject = 423
-const sourceProject = 102
+const settings = {
+    // TODO: move to args
+    const SOURCE_PROJECT_ID = 102
+    const TARGET_PROJECT_ID = 423
+    const TARGET_EPIC_ID = 422
+}
 
+// Used to update story names that have been migrated from the source workspace
+// and identify stories that have previously been migrated.
 const migratedPrefix = '[Migrated:'
 
 
@@ -20,25 +24,26 @@ const addStoryLinks = async () => {
     // This should run AFTER stories have been migrated.
     let storiesMap = {}
     let allStoryLinks = []
-    let sourceStories = await source.listStories(sourceProject).then(stories => {
-        stories.forEach(s => {
-            s.story_links.forEach(link => {
-                allStoryLinks.push({
-                    archived: s.archived,
-                    story_to_fix: s.id,
-                    old_subject_id: link.subject_id,
-                    verb: link.verb,
-                    old_object_id: link.object_id,
-                    created_at: link.created_id,
-                    updated_at: link.updated_at,
+    let sourceStories = await sourceApi.listStories(settings.SOURCE_PROJECT_ID).
+        then(stories => {
+            stories.forEach(s => {
+                s.story_links.forEach(link => {
+                    allStoryLinks.push({
+                        archived: s.archived,
+                        story_to_fix: s.id,
+                        old_subject_id: link.subject_id,
+                        verb: link.verb,
+                        old_object_id: link.object_id,
+                        created_at: link.created_id,
+                        updated_at: link.updated_at,
+                    })
                 })
+                // parse out the new id from the old story name, add to the map.
+                const newId = s.name.split(migratedPrefix).pop().split(']')[0]
+                storiesMap[s.id] = newId
             })
-            // parse out the new id from the old story name, add to the map.
-            const newId = s.name.split(migratedPrefix).pop().split(']')[0]
-            storiesMap[s.id] = newId
+            return stories
         })
-        return stories
-    })
     
     console.log(`Creating missing story links for ${allStoryLinks.length} stories`)
     for (let link of allStoryLinks) {
@@ -49,7 +54,7 @@ const addStoryLinks = async () => {
             }
         console.log(linkParam.subject_id, linkParam.verb, linkParam.object_id)
         try {
-            await target.createStoryLink(linkParam).then(console.log)
+            await targetApi.createStoryLink(linkParam).then(console.log)
         } catch(err) {
             // Likely already imported.
             // console.log(err)
@@ -60,14 +65,14 @@ const addStoryLinks = async () => {
 
 
 const createIterationsFromSource = async () => {
-    await source.listIterations().then(iters => {
+    await sourceApi.listIterations().then(iters => {
         iters.map(async iter => {
             const importIter = {
-                "name": iter.name,
-                "start_date": iter.start_date,
-                "end_date": iter.end_date,
+                name: iter.name,
+                start_date: iter.start_date,
+                end_date: iter.end_date,
             }
-            await target.createIteration(importIter).then(console.log)        
+            await targetApi.createIteration(importIter).then(console.log)        
         })
     })
 }
@@ -82,13 +87,14 @@ const importOne = async (storyId) => {
 
 
 const importAll = async () => {
-    await source.listProjects().then(projs => {
+    await sourceApi.listProjects().then(projs => {
         projs.forEach(p => console.log(p.name))
     })
     
-    const sourceStoryIds = await source.listStories(sourceProject).then(stories => {
-        return stories.map(s => s.id)
-    })
+    const sourceStoryIds = await sourceApi.listStories(settings.SOURCE_PROJECT_ID)
+        .then(stories => {
+            return stories.map(s => s.id)
+        })
     console.log(sourceStoryIds)
 
     const resourceMaps = await getResourceMaps()
@@ -111,7 +117,7 @@ const importAll = async () => {
 const updateStory = async (newStory) => {
 //    console.log(newStory)
     if (!newStory.create.name.startsWith(migratedPrefix)) {
-        await target.createStory(newStory.create).then(async res => {
+        await targetApi.createStory(newStory.create).then(async res => {
             console.log(`Created new story #${res.id}: ${res.name}`)
             console.log(` - - via old source story #${newStory.id}`)
             const origDescription = newStory.create.description || ''
@@ -120,7 +126,7 @@ const updateStory = async (newStory) => {
                 description: `${origDescription}\n\n** Migrated to ${res.app_url} **`,
             }
             
-            await source.updateStory(newStory.id, updateSource).then(console.log)
+            await sourceApi.updateStory(newStory.id, updateSource).then(console.log)
         })
     } else {
         console.log(`....We have already migrated this story... ~ ${newStory.create.name}`)
@@ -134,7 +140,7 @@ const getStoryForImport = async (sid, resourceMaps) => {
     const iterations = resourceMaps.iterations
     const workflows = resourceMaps.workflows
     
-    const s = await source.getStory(sid).then(sty => {
+    const s = await sourceApi.getStory(sid).then(sty => {
         console.log(`Fetched source story #${sty.id} - ${sty.name}`)
         return sty
     })
@@ -160,26 +166,26 @@ const getStoryForImport = async (sid, resourceMaps) => {
     })
 
     let newStory = {
-        "archived": s.archived,
-        "comments": sourceComments,
-        "completed_at_override": s.created_at_override,
-        "created_at": s.created_at,
-        "deadline": s.deadline,
-        "description": s.description,
-        "epic_id": targetEpic,
-        "estimate": s.estimate,
-        "external_id": s.app_url,
-        "follower_ids": mapMembers(s.follower_ids, members),
-        "iteration_id": iterations[s.iteration_id],
-        "name": s.name,
-        "owner_ids": mapMembers(s.owner_ids, members),
-        "project_id": targetProject,
-        "requested_by_id": members[s.requested_by_id],
-        "started_at_override": s.started_at_override,
-        "story_type": s.story_type,
-        "tasks": sourceTasks,
-        "updated_at": s.updated_at,
-        "workflow_state_id": workflows[s.workflow_state_id],
+        archived: s.archived,
+        comments: sourceComments,
+        completed_at_override: s.created_at_override,
+        created_at: s.created_at,
+        deadline: s.deadline,
+        description: s.description,
+        epic_id: settings.TARGET_EPIC_ID,
+        estimate: s.estimate,
+        external_id: s.app_url,
+        follower_ids: mapMembers(s.follower_ids, members),
+        iteration_id: iterations[s.iteration_id],
+        name: s.name,
+        owner_ids: mapMembers(s.owner_ids, members),
+        project_id: settings.TARGET_PROJECT_ID,
+        requested_by_id: members[s.requested_by_id],
+        started_at_override: s.started_at_override,
+        story_type: s.story_type,
+        tasks: sourceTasks,
+        updated_at: s.updated_at,
+        workflow_state_id: workflows[s.workflow_state_id],
     }
     return {
         id: s.id,
