@@ -5,11 +5,11 @@ const ch = require('clubhouse-lib')
 const sourceApi = ch.create(process.env.CLUBHOUSE_API_TOKEN_SOURCE); 
 const targetApi = ch.create(process.env.CLUBHOUSE_API_TOKEN_TARGET); 
 
-const settings = {
+const defaultSettings = {
     // TODO: move to args
-    const SOURCE_PROJECT_ID = 102
-    const TARGET_PROJECT_ID = 423
-    const TARGET_EPIC_ID = 422
+    SOURCE_PROJECT_ID: 102,
+    TARGET_PROJECT_ID: 423,
+    TARGET_EPIC_ID: 422,
 }
 
 // Used to update story names that have been migrated from the source workspace
@@ -19,12 +19,14 @@ const migratedPrefix = '[Migrated:'
 
 
 
-const addStoryLinks = async () => {
+const addStoryLinks = async (settings) => {
+    const sourceProjectId = settings.source_project || defaultSettings.SOURCE_PROJECT_ID
+
     // Handle mapping for story links (x blocks y, etc)
     // This should run AFTER stories have been migrated.
     let storiesMap = {}
     let allStoryLinks = []
-    let sourceStories = await sourceApi.listStories(settings.SOURCE_PROJECT_ID).
+    let sourceStories = await sourceApi.listStories(sourceProjectId).
         then(stories => {
             stories.forEach(s => {
                 s.story_links.forEach(link => {
@@ -64,34 +66,49 @@ const addStoryLinks = async () => {
 }
 
 
-const createIterationsFromSource = async () => {
+const createIterationsFromSource = async (unusedSettings) => {
+    const existingTargetIters = await targetApi.listIterations().then(iters => {
+        return iters.map(iter => iter.name)
+    })
+    
     await sourceApi.listIterations().then(iters => {
         iters.map(async iter => {
-            const importIter = {
-                name: iter.name,
-                start_date: iter.start_date,
-                end_date: iter.end_date,
+            if (!existingTargetIters.includes(iter.name)) {
+                const importIter = {
+                    name: iter.name,
+                    start_date: iter.start_date,
+                    end_date: iter.end_date,
+                }
+                await targetApi.createIteration(importIter).then(console.log)
             }
-            await targetApi.createIteration(importIter).then(console.log)        
         })
     })
 }
 
 
 
-const importOne = async (storyId) => {
+const importOne = async (settings) => {
+    const storyId = settings.story
+    const targetProjectId = settings.target_project || defaultSettings.TARGET_PROJECT_ID
+    const targetEpicId = settings.target_epic || defaultSettings.TARGET_EPIC_ID
+
     const resourceMaps = await getResourceMaps()
-    let newStory = await getStoryForImport(storyId, resourceMaps)
+    let newStory = await getStoryForImport(
+        storyId, resourceMaps, targetProjectId, targetEpicId)
     await updateStory(newStory)
 }
 
 
-const importAll = async () => {
+const importAll = async (settings) => {
+    const sourceProjectId = settings.source_project || defaultSettings.SOURCE_PROJECT_ID
+    const targetProjectId = settings.target_project || defaultSettings.TARGET_PROJECT_ID
+    const targetEpicId = settings.target_epic || defaultSettings.TARGET_EPIC_ID
+
     await sourceApi.listProjects().then(projs => {
         projs.forEach(p => console.log(p.name))
     })
     
-    const sourceStoryIds = await sourceApi.listStories(settings.SOURCE_PROJECT_ID)
+    const sourceStoryIds = await sourceApi.listStories(sourceProjectId)
         .then(stories => {
             return stories.map(s => s.id)
         })
@@ -100,9 +117,10 @@ const importAll = async () => {
     const resourceMaps = await getResourceMaps()
     
     let toImport = []
-    for (let sid of sourceStoryIds) {
-      let newStory = await getStoryForImport(sid, resourceMaps)
-      toImport.push(newStory)
+    for (let storyId of sourceStoryIds) {
+        let newStory = await getStoryForImport(
+            storyId, resourceMaps, targetProjectId, targetEpicId)
+        toImport.push(newStory)
     }
     //toImport = toImport.slice(0, 10)
     console.log(toImport.length)
@@ -135,12 +153,12 @@ const updateStory = async (newStory) => {
 
 
 
-const getStoryForImport = async (sid, resourceMaps) => {
+const getStoryForImport = async (storyId, resourceMaps, projectId, epicId) => {
     const members = resourceMaps.members
     const iterations = resourceMaps.iterations
     const workflows = resourceMaps.workflows
     
-    const s = await sourceApi.getStory(sid).then(sty => {
+    const s = await sourceApi.getStory(storyId).then(sty => {
         console.log(`Fetched source story #${sty.id} - ${sty.name}`)
         return sty
     })
@@ -172,14 +190,14 @@ const getStoryForImport = async (sid, resourceMaps) => {
         created_at: s.created_at,
         deadline: s.deadline,
         description: s.description,
-        epic_id: settings.TARGET_EPIC_ID,
+        epic_id: epicId,
         estimate: s.estimate,
         external_id: s.app_url,
         follower_ids: mapMembers(s.follower_ids, members),
         iteration_id: iterations[s.iteration_id],
         name: s.name,
         owner_ids: mapMembers(s.owner_ids, members),
-        project_id: settings.TARGET_PROJECT_ID,
+        project_id: projectId,
         requested_by_id: members[s.requested_by_id],
         started_at_override: s.started_at_override,
         story_type: s.story_type,
@@ -208,7 +226,7 @@ const mapMembers = (oldMemberIds, membersMap) => {
 
 const _getMapObj = async (apiCall, keyField, innerArrayField) => {
     const sourceMapNameToId = {}
-    await source[apiCall]().then(list => {
+    await sourceApi[apiCall]().then(list => {
         list.forEach(i => {
             if (innerArrayField) {
                 i[innerArrayField].forEach(inner => {
@@ -223,7 +241,7 @@ const _getMapObj = async (apiCall, keyField, innerArrayField) => {
     console.log(sourceMapNameToId)
 
     const mapSourceToTargetIds = {}
-    await target[apiCall]().then(list => {
+    await targetApi[apiCall]().then(list => {
         list.forEach(i => {
             if (innerArrayField) {
                 i[innerArrayField].forEach(inner => {
@@ -247,7 +265,9 @@ const _getMapObj = async (apiCall, keyField, innerArrayField) => {
 
 
 /* Create objects mapping old workspace ids to new workspace ids for
-   member, iterataion, and workflow resources */
+   member, iterataion, and workflow resources 
+   TODO: do this for epics too.
+*/
 const getResourceMaps = async () => {
 
     const membersMap = await _getMapObj('listMembers', 'profile.email_address')
@@ -288,4 +308,6 @@ module.exports = {
     addIterations: createIterationsFromSource,
 }
 
-require('make-runnable')
+require('make-runnable/custom')({
+    printOutputFrame: false
+})
